@@ -15,29 +15,33 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download Brent CSV & wrap into HTML
-        run: |
-          set -e
+- name: Download Brent CSV (retry until not empty)
+  run: |
+    set -e
+    url="https://stooq.com/q/d/l/?s=cb.f&i=5"
+    for n in {1..5}; do
+      curl -fLs -H "User-Agent: GitHubActions" \
+        -H "Referer: https://stooq.com" \
+        "$url" -o /tmp/brent.csv
 
-          # Скачиваем 5-минутные бары Brent (front-month) со Stooq
-          curl -Ls -H "User-Agent: GitHubActions" \
-               -H "Referer: https://stooq.com" \
-               "https://stooq.com/q/d/l/?s=cb.f&i=5" \
-               -o /tmp/brent.csv
+      # если файл > 10 KB — считаем его валидным
+      if [ $(stat -c%s /tmp/brent.csv) -gt 10240 ]; then
+        echo "CSV looks OK (size >10 KB)"
+        break
+      fi
+      echo "Empty CSV (try $n/5) — retry in 30 s"
+      sleep 30
+    done
 
-          # Оборачиваем CSV в простую HTML-страницу
-          echo '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>' > brent_5min.html
-          echo '<pre id="data">'                             >> brent_5min.html
-          cat /tmp/brent.csv                                 >> brent_5min.html
-          echo '</pre></body></html>'                        >> brent_5min.html
+    if [ $(stat -c%s /tmp/brent.csv) -le 10240 ]; then
+      echo "::error::Stooq returned empty CSV after 5 tries"
+      exit 1
+    fi
 
-      - name: Commit & push updated HTML
-        env:
-          TZ: UTC
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add brent_5min.html
-          git commit -m "Auto-update Brent 5-min $(date -u '+%Y-%m-%d %H:%M UTC')" || echo "No changes"
-          git push
+    # обёртка в HTML
+    {
+      echo '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>'
+      echo '<pre id="data">'
+      cat /tmp/brent.csv
+      echo '</pre></body></html>'
+    } > brent_5min.html
